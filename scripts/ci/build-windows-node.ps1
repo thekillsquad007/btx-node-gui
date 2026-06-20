@@ -15,17 +15,37 @@ function Write-Step([string]$Message) {
     Write-Host "[ci] $Message"
 }
 
+function Get-CmakeVsGenerator([string]$InstallationPath, [string]$MajorVersion) {
+    if ($InstallationPath -match '\\18\\' -or $MajorVersion -match '^18\.') {
+        return "Visual Studio 18 2026"
+    }
+    if ($InstallationPath -match '\\2022\\' -or $MajorVersion -match '^17\.') {
+        return "Visual Studio 17 2022"
+    }
+    throw "Unsupported Visual Studio installation at $InstallationPath (version $MajorVersion)"
+}
+
 function Get-VsInstallInfo {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere)) {
         throw "vswhere.exe not found"
     }
 
-    $installationPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if ([string]::IsNullOrWhiteSpace($installationPath)) {
+    $vsArgs = @(
+        "-latest",
+        "-products", "*",
+        "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "-property", "installationPath",
+        "-property", "installationVersion"
+    )
+    $vsInfo = & $vswhere @vsArgs | ForEach-Object { $_.Trim() }
+    if ($LASTEXITCODE -ne 0 -or $vsInfo.Count -lt 2) {
         throw "Visual Studio C++ tools were not found"
     }
-    $installationPath = $installationPath.Trim()
+
+    $installationPath = $vsInfo[0]
+    $installationVersion = $vsInfo[1]
+    $majorVersion = ($installationVersion -split '\.')[0] + '.' + ($installationVersion -split '\.')[1]
 
     $vsDevCmd = Join-Path $installationPath "Common7\Tools\VsDevCmd.bat"
     if (-not (Test-Path -LiteralPath $vsDevCmd)) {
@@ -34,6 +54,9 @@ function Get-VsInstallInfo {
 
     return @{
         InstallationPath = $installationPath
+        InstallationVersion = $installationVersion
+        MajorVersion = $majorVersion
+        Generator = (Get-CmakeVsGenerator -InstallationPath $installationPath -MajorVersion $majorVersion)
         VsDevCmd = $vsDevCmd
     }
 }
@@ -49,7 +72,11 @@ function Import-VsDevEnvironment([string]$VsDevCmd) {
 
 function Invoke-VsCmake([hashtable]$Vs, [string[]]$CmakeArgs, [string]$Label) {
     Import-VsDevEnvironment -VsDevCmd $Vs.VsDevCmd
+    Remove-Item Env:CMAKE_TOOLCHAIN_FILE -ErrorAction SilentlyContinue
     $env:VCPKG_ROOT = $VcpkgRoot
+    if ($env:VCPKG_ROOT -ne $VcpkgRoot) {
+        throw "Failed to pin VCPKG_ROOT to $VcpkgRoot (got $($env:VCPKG_ROOT))"
+    }
     Write-Step $Label
     & cmake @CmakeArgs
     if ($LASTEXITCODE -ne 0) {
@@ -162,11 +189,11 @@ $vs = Get-VsInstallInfo
 $toolchain = Ensure-Vcpkg -Root $VcpkgRoot
 
 Write-Step "Configuring headless wallet-enabled BTX build (no Qt/GUI)"
-Write-Step "Using Visual Studio at $($vs.InstallationPath)"
+Write-Step "Using $($vs.Generator) at $($vs.InstallationPath) (version $($vs.InstallationVersion))"
 $configureArgs = @(
     "-S", $BtxSourceDir,
     "-B", $BuildDir,
-    "-G", "Visual Studio 17 2022",
+    "-G", $vs.Generator,
     "-A", "x64",
     "-DCMAKE_GENERATOR_INSTANCE=$($vs.InstallationPath)",
     "-DCMAKE_TOOLCHAIN_FILE=$toolchain",

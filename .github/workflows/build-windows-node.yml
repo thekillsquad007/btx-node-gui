@@ -112,7 +112,10 @@ jobs:
 
       - name: Build Windows binaries
         shell: pwsh
+        env:
+          VCPKG_ROOT: C:\vcpkg
         run: |
+          $env:VCPKG_ROOT = 'C:\vcpkg'
           & "${env:GITHUB_WORKSPACE}\scripts\ci\build-windows-node.ps1" `
             -BtxSourceDir "${env:GITHUB_WORKSPACE}\btx-src" `
             -BuildDir "${env:GITHUB_WORKSPACE}\btx-build" `

@@ -32,11 +32,14 @@ if ($scriptText -match "windows-clangcl-static") {
 if ($scriptText -match "cmake\s+--preset") {
     throw 'build-windows-node.ps1 must not use cmake presets (they enable vcpkg default features)'
 }
-if ($scriptText -notmatch 'Visual Studio 17 2022') {
-    throw 'build-windows-node.ps1 must use the Visual Studio 17 2022 generator'
+if ($scriptText -notmatch 'Get-CmakeVsGenerator') {
+    throw 'build-windows-node.ps1 must resolve the Visual Studio generator from vswhere'
 }
 if ($scriptText -notmatch 'CMAKE_GENERATOR_INSTANCE') {
     throw 'build-windows-node.ps1 must pin the Visual Studio generator instance for CI'
+}
+if ($scriptText -notmatch '\$env:VCPKG_ROOT = \$VcpkgRoot') {
+    throw 'build-windows-node.ps1 must override the Visual Studio bundled vcpkg root'
 }
 if ($scriptText -notmatch "Assert-HeadlessVcpkgInstall") {
     throw 'build-windows-node.ps1 must verify the headless vcpkg install'
