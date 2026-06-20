@@ -71,6 +71,28 @@ function Import-VsDevEnvironment([string]$VsDevCmd) {
         }
 }
 
+function Apply-WindowsSourcePatches([string]$SourceDir) {
+    $header = Join-Path $SourceDir "src\kernel\chainstatemanager_opts.h"
+    if (-not (Test-Path -LiteralPath $header)) {
+        throw "Missing BTX header for Windows patch: $header"
+    }
+
+    $content = Get-Content -LiteralPath $header -Raw
+    if ($content -notmatch '#undef STRICT') {
+        $guard = @"
+
+// Windows headers define STRICT as a macro, which breaks ReorgProtectionProfile::STRICT.
+#ifdef STRICT
+#undef STRICT
+#endif
+
+"@
+        $content = $content.Replace("#include <optional>", "#include <optional>$guard")
+        Set-Content -LiteralPath $header -Value $content -Encoding utf8NoBOM -NoNewline
+        Write-Step "Patched chainstatemanager_opts.h for Windows STRICT macro conflict"
+    }
+}
+
 function Ensure-ClangClOnPath([string]$VsInstallationPath) {
     $candidates = @(
         "C:\Program Files\LLVM\bin",
@@ -206,6 +228,7 @@ New-Item -ItemType Directory -Force -Path $VcpkgBuildtrees | Out-Null
 
 $vs = Get-VsInstallInfo
 $toolchain = Ensure-Vcpkg -Root $VcpkgRoot
+Apply-WindowsSourcePatches -SourceDir $BtxSourceDir
 
 Write-Step "Configuring headless wallet-enabled BTX build (Ninja + clang-cl, no Qt/GUI)"
 Write-Step "Using Visual Studio toolchain at $($vs.InstallationPath) (version $($vs.InstallationVersion))"
