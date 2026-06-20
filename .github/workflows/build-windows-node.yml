@@ -34,6 +34,7 @@ concurrency:
 
 env:
   VCPKG_ROOT: C:\vcpkg
+  VCPKG_INSTALLED_DIR: C:\vcpkg-installed\btx-node
   VCPKG_BUILDTREES_ROOT: C:\vcpkg-buildtrees
 
 jobs:
@@ -71,23 +72,45 @@ jobs:
           ref: ${{ steps.params.outputs.btx_ref }}
           path: btx-src
 
+      - name: Validate CI build configuration
+        shell: pwsh
+        run: |
+          & "${env:GITHUB_WORKSPACE}\scripts\ci\validate-build-config.ps1" `
+            -BtxSourceDir "${env:GITHUB_WORKSPACE}\btx-src"
+
       - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: |
             C:\vcpkg\downloads
             C:\vcpkg\packages
-            C:\vcpkg\installed
+            C:\vcpkg-installed
             C:\vcpkg-buildtrees
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('btx-src/vcpkg.json') }}
+          key: vcpkg-headless-wallet-${{ hashFiles('btx-src/vcpkg.json') }}
           restore-keys: |
-            vcpkg-${{ runner.os }}-
+            vcpkg-headless-wallet-
 
       - name: Build Windows binaries
         shell: pwsh
         run: |
           & "${env:GITHUB_WORKSPACE}\scripts\ci\build-windows-node.ps1" `
-            -BtxSourceDir "${env:GITHUB_WORKSPACE}\btx-src"
+            -BtxSourceDir "${env:GITHUB_WORKSPACE}\btx-src" `
+            -BuildDir "${env:GITHUB_WORKSPACE}\btx-build" `
+            -VcpkgRoot $env:VCPKG_ROOT `
+            -VcpkgInstalledDir $env:VCPKG_INSTALLED_DIR `
+            -VcpkgBuildtrees $env:VCPKG_BUILDTREES_ROOT
+
+      - name: Verify binaries exist
+        shell: pwsh
+        run: |
+          if (-not $env:BTXD_PATH -or -not (Test-Path -LiteralPath $env:BTXD_PATH)) {
+            throw "BTXD_PATH missing: $env:BTXD_PATH"
+          }
+          if (-not $env:BTX_CLI_PATH -or -not (Test-Path -LiteralPath $env:BTX_CLI_PATH)) {
+            throw "BTX_CLI_PATH missing: $env:BTX_CLI_PATH"
+          }
+          Write-Host "OK: $($env:BTXD_PATH)"
+          Write-Host "OK: $($env:BTX_CLI_PATH)"
 
       - name: Package Windows release archive
         id: package
@@ -131,12 +154,8 @@ jobs:
           || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
         shell: pwsh
         run: |
-          $tag = '${{ steps.params.outputs.btx_ref }}'
-          if ($tag -like 'v*') {
-            $releaseTag = $tag
-          } else {
-            $releaseTag = ''
-          }
+          $btxRef = '${{ steps.params.outputs.btx_ref }}'
+          $releaseTag = if ($btxRef -match '^v') { $btxRef } else { '' }
           & "${env:GITHUB_WORKSPACE}\scripts\ci\download-btx-snapshots.ps1" `
             -BtxRepo '${{ steps.params.outputs.btx_repo }}' `
             -ReleaseTag $releaseTag `
@@ -180,5 +199,6 @@ jobs:
             dist/SHA256SUMS
             dist/snapshot.dat
             dist/snapshot.manifest.json
+          fail_on_unmatched_files: false
           draft: false
           prerelease: false
