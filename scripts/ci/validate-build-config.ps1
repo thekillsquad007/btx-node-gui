@@ -32,11 +32,14 @@ if ($scriptText -match "windows-clangcl-static") {
 if ($scriptText -match "cmake\s+--preset") {
     throw 'build-windows-node.ps1 must not use cmake presets (they enable vcpkg default features)'
 }
-if ($scriptText -notmatch 'Get-CmakeVsGenerator') {
-    throw 'build-windows-node.ps1 must resolve the Visual Studio generator from vswhere'
+if ($scriptText -notmatch 'clang-cl') {
+    throw 'build-windows-node.ps1 must build with clang-cl on Windows'
 }
-if ($scriptText -notmatch 'CMAKE_GENERATOR_INSTANCE') {
-    throw 'build-windows-node.ps1 must pin the Visual Studio generator instance for CI'
+if ($scriptText -notmatch '"Ninja"') {
+    throw 'build-windows-node.ps1 must use the Ninja generator'
+}
+if ($scriptText -notmatch 'x64-windows-static') {
+    throw 'build-windows-node.ps1 must use the x64-windows-static vcpkg triplet'
 }
 if ($scriptText -notmatch '\$env:VCPKG_ROOT = \$VcpkgRoot') {
     throw 'build-windows-node.ps1 must override the Visual Studio bundled vcpkg root'

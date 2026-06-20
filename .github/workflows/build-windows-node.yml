@@ -86,9 +86,9 @@ jobs:
             C:\vcpkg\packages
             C:\vcpkg-installed
             C:\vcpkg-buildtrees
-          key: vcpkg-headless-wallet-v2-${{ hashFiles('btx-src/vcpkg.json') }}
+          key: vcpkg-headless-wallet-clangcl-v3-${{ hashFiles('btx-src/vcpkg.json') }}
           restore-keys: |
-            vcpkg-headless-wallet-v2-
+            vcpkg-headless-wallet-clangcl-v3-
 
       - name: Initialize MSVC environment
         uses: ilammy/msvc-dev-cmd@v1

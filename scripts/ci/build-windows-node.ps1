@@ -71,6 +71,22 @@ function Import-VsDevEnvironment([string]$VsDevCmd) {
         }
 }
 
+function Ensure-ClangClOnPath([string]$VsInstallationPath) {
+    $candidates = @(
+        "C:\Program Files\LLVM\bin",
+        (Join-Path $VsInstallationPath "VC\Tools\Llvm\x64\bin")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath (Join-Path $candidate "clang-cl.exe")) {
+            if ($env:Path -notlike "*$candidate*") {
+                $env:Path = "$candidate;$env:Path"
+            }
+            return (Join-Path $candidate "clang-cl.exe")
+        }
+    }
+    throw "clang-cl.exe not found; BTX requires clang-cl on Windows"
+}
+
 function Invoke-VsCmake([hashtable]$Vs, [string[]]$CmakeArgs, [string]$Label) {
     Import-VsDevEnvironment -VsDevCmd $Vs.VsDevCmd
     Remove-Item Env:CMAKE_TOOLCHAIN_FILE -ErrorAction SilentlyContinue
@@ -78,6 +94,8 @@ function Invoke-VsCmake([hashtable]$Vs, [string[]]$CmakeArgs, [string]$Label) {
     if ($env:VCPKG_ROOT -ne $VcpkgRoot) {
         throw "Failed to pin VCPKG_ROOT to $VcpkgRoot (got $($env:VCPKG_ROOT))"
     }
+    $clangCl = Ensure-ClangClOnPath -VsInstallationPath $Vs.InstallationPath
+    Write-Step "Using clang-cl at $clangCl"
     Write-Step $Label
     & cmake @CmakeArgs
     if ($LASTEXITCODE -ne 0) {
@@ -189,16 +207,17 @@ New-Item -ItemType Directory -Force -Path $VcpkgBuildtrees | Out-Null
 $vs = Get-VsInstallInfo
 $toolchain = Ensure-Vcpkg -Root $VcpkgRoot
 
-Write-Step "Configuring headless wallet-enabled BTX build (no Qt/GUI)"
-Write-Step "Using $($vs.Generator) at $($vs.InstallationPath) (version $($vs.InstallationVersion))"
+Write-Step "Configuring headless wallet-enabled BTX build (Ninja + clang-cl, no Qt/GUI)"
+Write-Step "Using Visual Studio toolchain at $($vs.InstallationPath) (version $($vs.InstallationVersion))"
 $configureArgs = @(
     "-S", $BtxSourceDir,
     "-B", $BuildDir,
-    "-G", $vs.Generator,
-    "-A", "x64",
-    "-DCMAKE_GENERATOR_INSTANCE=$($vs.InstallationPath)",
+    "-G", "Ninja",
+    "-DCMAKE_BUILD_TYPE=$Configuration",
+    "-DCMAKE_C_COMPILER=clang-cl",
+    "-DCMAKE_CXX_COMPILER=clang-cl",
     "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
-    "-DVCPKG_TARGET_TRIPLET=x64-windows",
+    "-DVCPKG_TARGET_TRIPLET=x64-windows-static",
     "-DVCPKG_INSTALLED_DIR=$VcpkgInstalledDir",
     "-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=$VcpkgBuildtrees",
     "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON",
@@ -223,7 +242,6 @@ Assert-HeadlessVcpkgInstall -InstalledDir $VcpkgInstalledDir -BuildDir $BuildDir
 Write-Step "Building btxd and btx-cli ($Configuration)"
 $buildArgs = @(
     "--build", $BuildDir,
-    "--config", $Configuration,
     "--parallel",
     "--target", "btxd", "btx-cli"
 )
