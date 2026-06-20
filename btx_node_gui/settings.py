@@ -26,6 +26,9 @@ class Settings:
     rpc_port: int = 19334
     refresh_seconds: int = 5
     github_release_repo: str = "thekillsquad007/btx-node-gui"
+    github_btx_repo: str = "btxchain/btx"
+    prune_target: int = 4096
+    auto_download_snapshots: bool = True
     pool_folder: str = r"E:\Business\btxpool"
 
     @classmethod
@@ -62,3 +65,9 @@ class Settings:
 
     def manager_log_path(self) -> Path:
         return CONFIG_DIR / "node-manager.log"
+
+    def snapshot_dat_path(self) -> Path:
+        return self.resolved_datadir() / "snapshot.dat"
+
+    def snapshot_manifest_path(self) -> Path:
+        return self.resolved_datadir() / "snapshot.manifest.json"

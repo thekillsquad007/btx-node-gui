@@ -151,10 +151,22 @@ def install_release(settings: Settings, release: ReleaseAsset, log_cb=None) -> s
                 shutil.copy2(src, bin_dir / name)
                 log(f"Installed {name}")
 
+    from .native import ensure_pruned_conf
+    from .snapshots import download_snapshots
+
+    ensure_pruned_conf(settings)
+    log(f"Node will run pruned with prune={settings.prune_target}")
+    if settings.auto_download_snapshots:
+        try:
+            snap_msg = download_snapshots(settings, log_cb=log)
+            log(snap_msg)
+        except Exception as exc:
+            log(f"Warning: snapshot download failed: {exc}")
+
     version_out = settings.btxd_path()
     if not version_out.is_file():
         raise NodeError("Install finished but btxd.exe is missing.")
-    return f"Installed {release.tag} into {bin_dir}"
+    return f"Installed {release.tag} into {bin_dir} (pruned mode, prune={settings.prune_target})"
 
 
 def process_running_safe(settings: Settings) -> bool:

@@ -19,6 +19,7 @@ from .native import (
     stop_node,
     tail_log,
 )
+from .snapshots import download_snapshots, rebootstrap_from_snapshot, snapshot_status
 from .rpc import NodeStatus, fetch_status
 from .settings import Settings
 from .updater import compare_versions, upgrade_node
@@ -145,6 +146,7 @@ class BtxNodeApp(ctk.CTk):
                 ("prune", "Prune height"),
                 ("summary", "Status"),
                 ("health", "Health"),
+                ("snapshots", "Snapshots"),
                 ("pool_rpc", "Pool RPC URL (WSL)"),
             ]
         ):
@@ -159,8 +161,8 @@ class BtxNodeApp(ctk.CTk):
             [
                 ("Start node", self._action_start, "#1f6aa5"),
                 ("Stop node", self._action_stop, "#8b3a3a"),
+                ("Rebootstrap", self._action_rebootstrap, "#7a5c1e"),
                 ("Open datadir", self._open_datadir, "#444444"),
-                ("Open pool folder", self._open_pool_folder, "#444444"),
             ]
         ):
             ctk.CTkButton(actions, text=text, command=cmd, fg_color=color, hover_color=color).grid(
@@ -171,9 +173,9 @@ class BtxNodeApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text=(
-                "Binaries are built in GitHub Actions — no Visual Studio on your PC. "
-                "Install from the Updates tab, then start the node here. "
-                "If the pool still runs in WSL, point its rpc_url at the Pool RPC URL above."
+                "Pruned node only (prune=4096). Snapshots are pulled from the latest btxchain/btx release "
+                "on install/start. First start bootstraps from snapshot automatically when chain data is empty. "
+                "If the pool runs in WSL, use the Pool RPC URL above."
             ),
             text_color="gray60",
             wraplength=860,
@@ -207,7 +209,7 @@ class BtxNodeApp(ctk.CTk):
 
         self.update_hint = ctk.CTkLabel(
             frame,
-            text="Downloads Windows btxd.exe from your GitHub fork's releases (built by Actions).",
+            text="Installs Windows btxd.exe from your fork's CI releases and pulls snapshot.dat from btxchain/btx.",
             text_color="gray60",
             anchor="w",
             wraplength=860,
@@ -222,6 +224,9 @@ class BtxNodeApp(ctk.CTk):
             btns, text="Install / upgrade", command=self._action_install, state="disabled"
         )
         self.install_btn.pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="Download snapshots", command=self._action_download_snapshots).pack(
+            side="left", padx=4
+        )
 
         self.update_log = ctk.CTkTextbox(frame, height=240, font=ctk.CTkFont(family="Consolas", size=12))
         self.update_log.grid(row=4, column=0, sticky="nsew", padx=8, pady=8)
@@ -235,6 +240,7 @@ class BtxNodeApp(ctk.CTk):
             ("bin_dir", "btx binaries folder", self.settings.resolved_bin_dir()),
             ("datadir", "Node datadir", self.settings.resolved_datadir()),
             ("github_release_repo", "GitHub repo for CI releases (owner/name)", self.settings.github_release_repo),
+            ("github_btx_repo", "BTX upstream for snapshots (owner/name)", self.settings.github_btx_repo),
             ("pool_folder", "Pool folder (Windows path)", self.settings.pool_folder),
         ]
         self.setting_entries: dict[str, ctk.CTkEntry] = {}
@@ -277,7 +283,14 @@ class BtxNodeApp(ctk.CTk):
             health = health_summary(self.settings)
             version = installed_version(self.settings)
             pool_rpc = lan_rpc_hint(self.settings)
-            self.after(0, lambda: self._apply_status(status, health, version, pool_rpc))
+            snap = snapshot_status(self.settings)
+            snap_text = (
+                f"{'ready' if snap.ready else 'missing'} · "
+                f"{snap.dat_bytes / (1024 * 1024):.0f} MB · source {snap.source_tag}"
+                if snap.ready
+                else f"missing — pull from {self.settings.github_btx_repo}"
+            )
+            self.after(0, lambda: self._apply_status(status, health, version, pool_rpc, snap_text))
 
         self._run_async(work, on_done=self._schedule_refresh)
 
@@ -293,6 +306,7 @@ class BtxNodeApp(ctk.CTk):
         health: str,
         version: str,
         pool_rpc: str,
+        snap_text: str,
     ) -> None:
         self._last_status = status
         self.metric_labels["blocks"].configure(text=f"{status.blocks:,}")
@@ -307,6 +321,7 @@ class BtxNodeApp(ctk.CTk):
         self.info_labels["prune"].configure(text=prune)
         self.info_labels["summary"].configure(text=status.summary)
         self.info_labels["health"].configure(text=health)
+        self.info_labels["snapshots"].configure(text=snap_text)
         self.info_labels["pool_rpc"].configure(text=pool_rpc)
 
         badge_text, badge_color = self._badge_for(status)
@@ -332,12 +347,53 @@ class BtxNodeApp(ctk.CTk):
         return "Unknown", "#3b3b3b"
 
     def _action_start(self) -> None:
+        def log_cb(msg: str) -> None:
+            self.after(0, lambda: self._append_update_log(msg))
+
         def work() -> None:
             try:
-                msg = start_node(self.settings)
+                msg = start_node(self.settings, log_cb=log_cb)
                 self.after(0, lambda: messagebox.showinfo("Node", msg))
             except NodeError as exc:
                 self.after(0, lambda: messagebox.showerror("Start failed", str(exc)))
+            finally:
+                self.after(0, self.refresh_status)
+
+        self._run_async(work)
+
+    def _action_rebootstrap(self) -> None:
+        if not messagebox.askyesno(
+            "Rebootstrap",
+            "Rebuild the pruned node from snapshot.dat?\n\n"
+            "This wipes blocks/chainstate/shielded_state and reloads the published snapshot. "
+            "Expect 45–90 minutes. Stop the pool first.",
+        ):
+            return
+
+        def log_cb(msg: str) -> None:
+            self.after(0, lambda: self._append_update_log(msg))
+
+        def work() -> None:
+            try:
+                msg = rebootstrap_from_snapshot(self.settings, log_cb=log_cb)
+                self.after(0, lambda: messagebox.showinfo("Rebootstrap", msg))
+            except NodeError as exc:
+                self.after(0, lambda: messagebox.showerror("Rebootstrap failed", str(exc)))
+            finally:
+                self.after(0, self.refresh_status)
+
+        self._run_async(work)
+
+    def _action_download_snapshots(self) -> None:
+        def log_cb(msg: str) -> None:
+            self.after(0, lambda: self._append_update_log(msg))
+
+        def work() -> None:
+            try:
+                msg = download_snapshots(self.settings, log_cb=log_cb, force=True)
+                self.after(0, lambda: messagebox.showinfo("Snapshots", msg))
+            except Exception as exc:
+                self.after(0, lambda: messagebox.showerror("Snapshot download failed", str(exc)))
             finally:
                 self.after(0, self.refresh_status)
 

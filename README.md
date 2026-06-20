@@ -55,6 +55,8 @@ Double-click **`BTX Node Manager.bat`**.
 Config: `%USERPROFILE%\.btx-node-gui\config.json`  
 Node datadir: `%LOCALAPPDATA%\BTX\`
 
+**Pruned mode only** (`prune=4096`). On install/start the GUI pulls `snapshot.dat` + `snapshot.manifest.json` from the latest [btxchain/btx](https://github.com/btxchain/btx) release (or your CI release if snapshots are bundled). First start auto-bootstraps from snapshot when chain data is empty.
+
 ## Pool in WSL
 
 Native node's RPC listens on `0.0.0.0:19334`. The Overview tab shows **Pool RPC URL (WSL)** — use that in `btxpool/config.yaml` instead of `127.0.0.1` when the pool runs inside WSL.
