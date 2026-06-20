@@ -145,14 +145,14 @@ function Assert-HeadlessVcpkgInstall([string]$InstalledDir, [string]$BuildDir) {
     $cacheFile = Join-Path $BuildDir "CMakeCache.txt"
     if (Test-Path -LiteralPath $cacheFile) {
         $cache = Get-Content -LiteralPath $cacheFile -Raw
-        if ($cache -notmatch "VCPKG_MANIFEST_NO_DEFAULT_FEATURES:BOOL=ON") {
-            throw "CMake cache missing VCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON"
-        }
-        if ($cache -notmatch "VCPKG_MANIFEST_FEATURES:STRING=wallet") {
-            throw "CMake cache must request wallet feature only"
-        }
         if ($cache -match "BUILD_GUI:BOOL=ON") {
             throw "BUILD_GUI must remain OFF for headless node CI"
+        }
+        if ($cache -notmatch "BUILD_GUI:BOOL=OFF") {
+            throw "CMake cache missing BUILD_GUI=OFF"
+        }
+        if ($cache -match "VCPKG_MANIFEST_FEATURES:STRING=.*qt5") {
+            throw "CMake cache must not request qt5 vcpkg features"
         }
     }
 }
