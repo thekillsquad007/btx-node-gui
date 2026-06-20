@@ -47,6 +47,9 @@ if ($scriptText -notmatch '\$env:VCPKG_ROOT = \$VcpkgRoot') {
 if ($scriptText -notmatch 'Apply-WindowsSourcePatches') {
     throw 'build-windows-node.ps1 must apply required Windows source patches before configure'
 }
+if ($scriptText -notmatch 'CMAKE_CXX_FLAGS=-U STRICT') {
+    throw 'build-windows-node.ps1 must undefine the Windows STRICT macro for all translation units'
+}
 if ($scriptText -notmatch "Assert-HeadlessVcpkgInstall") {
     throw 'build-windows-node.ps1 must verify the headless vcpkg install'
 }
