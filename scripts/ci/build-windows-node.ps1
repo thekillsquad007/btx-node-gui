@@ -31,20 +31,21 @@ function Get-VsInstallInfo {
         throw "vswhere.exe not found"
     }
 
-    $vsArgs = @(
-        "-latest",
-        "-products", "*",
-        "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-        "-property", "installationPath",
-        "-property", "installationVersion"
-    )
-    $vsInfo = & $vswhere @vsArgs | ForEach-Object { $_.Trim() }
-    if ($LASTEXITCODE -ne 0 -or $vsInfo.Count -lt 2) {
+    $vsMatches = & $vswhere `
+        -latest `
+        -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -format json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $vsMatches) {
         throw "Visual Studio C++ tools were not found"
     }
 
-    $installationPath = $vsInfo[0]
-    $installationVersion = $vsInfo[1]
+    $vsMatch = @($vsMatches)[0]
+    $installationPath = [string]$vsMatch.installationPath
+    $installationVersion = [string]$vsMatch.installationVersion
+    if ([string]::IsNullOrWhiteSpace($installationPath) -or [string]::IsNullOrWhiteSpace($installationVersion)) {
+        throw "Visual Studio C++ tools were not found"
+    }
     $majorVersion = ($installationVersion -split '\.')[0] + '.' + ($installationVersion -split '\.')[1]
 
     $vsDevCmd = Join-Path $installationPath "Common7\Tools\VsDevCmd.bat"
