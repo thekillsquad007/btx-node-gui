@@ -4,8 +4,9 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from .installer import installed_version as binary_installed_version
+from .native import NodeError, btx_cli, process_running
 from .settings import Settings
-from .wsl import WslError, btx_cli
 
 
 @dataclass
@@ -41,14 +42,26 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def fetch_status(settings: Settings) -> NodeStatus:
-    from .wsl import process_running
-
-    running = process_running(settings, r"btxd\.real.*-datadir=")
+    running = process_running(settings)
+    if not settings.btxd_path().is_file():
+        return NodeStatus(
+            running=False,
+            rpc_ok=False,
+            synced=False,
+            blocks=0,
+            headers=0,
+            progress=0.0,
+            peers=0,
+            ibd=True,
+            version="",
+            prune_height=None,
+            error="Node binaries not installed — use Updates → Install latest build",
+        )
     try:
         info = json.loads(btx_cli(settings, "getblockchaininfo", timeout=15))
         net = json.loads(btx_cli(settings, "getnetworkinfo", timeout=15))
         rpc_ok = True
-    except (WslError, json.JSONDecodeError) as e:
+    except (NodeError, json.JSONDecodeError) as exc:
         return NodeStatus(
             running=running,
             rpc_ok=False,
@@ -60,7 +73,7 @@ def fetch_status(settings: Settings) -> NodeStatus:
             ibd=True,
             version="",
             prune_height=None,
-            error=str(e),
+            error=str(exc),
         )
 
     ibd = bool(info.get("initialblockdownload", True))
@@ -80,11 +93,4 @@ def fetch_status(settings: Settings) -> NodeStatus:
 
 
 def installed_version(settings: Settings) -> str:
-    try:
-        out = btx_cli(settings, "--version", timeout=10)
-        return out.splitlines()[0] if out else "unknown"
-    except WslError:
-        from .wsl import run_bash
-
-        result = run_bash(settings, f'"{settings.btx_bin}/btxd" --version 2>/dev/null | head -1', timeout=10)
-        return (result.stdout or "not installed").strip()
+    return binary_installed_version(settings)

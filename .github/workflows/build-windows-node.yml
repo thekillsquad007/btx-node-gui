@@ -1,0 +1,175 @@
+# Builds native Windows btxd/btx-cli binaries in GitHub Actions and publishes
+# them as release assets. The BTX Node Manager GUI downloads these — no local
+# Visual Studio / vcpkg install required on your PC.
+
+name: Build Windows BTX Node
+
+on:
+  workflow_dispatch:
+    inputs:
+      btx_repo:
+        description: Upstream BTX source (owner/name)
+        required: false
+        default: btxchain/btx
+      btx_ref:
+        description: Git ref to build (tag or branch)
+        required: false
+        default: v0.32.12
+      publish_release:
+        description: Create/update a GitHub release with the Windows zip
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: Release tag (e.g. node-v0.32.12). Defaults to node-<version>
+        required: false
+        default: ""
+  push:
+    tags:
+      - "node-v*"
+
+concurrency:
+  group: windows-node-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VCPKG_ROOT: C:\btx-deps\vcpkg
+  VCPKG_INSTALLED_DIR: C:\btx-deps\vcpkg_installed\btx-node
+  VCPKG_BUILDTREES_ROOT: C:\btx-deps\vcpkg-buildtrees
+
+jobs:
+  build-windows:
+    name: Build Windows node binaries
+    runs-on: windows-latest
+    timeout-minutes: 240
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout GUI repo
+        uses: actions/checkout@v4
+
+      - name: Resolve build parameters
+        id: params
+        shell: pwsh
+        run: |
+          $btxRepo = '${{ github.event.inputs.btx_repo }}'
+          if ([string]::IsNullOrWhiteSpace($btxRepo)) { $btxRepo = 'btxchain/btx' }
+          $btxRef = '${{ github.event.inputs.btx_ref }}'
+          if ([string]::IsNullOrWhiteSpace($btxRef)) { $btxRef = 'v0.32.12' }
+          if ('${{ github.ref }}' -like 'refs/tags/node-v*') {
+            $tag = '${{ github.ref_name }}'
+            if ($btxRef -eq 'v0.32.12') {
+              $btxRef = $tag -replace '^node-v', 'v'
+            }
+          }
+          "btx_repo=$btxRepo" >> $env:GITHUB_OUTPUT
+          "btx_ref=$btxRef" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout BTX source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.params.outputs.btx_repo }}
+          ref: ${{ steps.params.outputs.btx_ref }}
+          path: btx-src
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\btx-deps\vcpkg
+            C:\btx-deps\vcpkg_installed
+            C:\btx-deps\vcpkg-buildtrees
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('btx-src/vcpkg.json', 'btx-src/vcpkg.lock.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Build Windows binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $buildDir = Join-Path $env:GITHUB_WORKSPACE 'btx-build'
+          & "${env:GITHUB_WORKSPACE}\btx-src\contrib\devtools\build-btx-windows.ps1" `
+            -SourceDir "${env:GITHUB_WORKSPACE}\btx-src" `
+            -BuildDir $buildDir `
+            -VcpkgRoot $env:VCPKG_ROOT `
+            -VcpkgInstalledDir $env:VCPKG_INSTALLED_DIR `
+            -VcpkgBuildtreesRoot $env:VCPKG_BUILDTREES_ROOT `
+            -SkipSmokeTest
+          $daemon = Get-ChildItem -Path $buildDir -Recurse -Filter 'btxd.exe' | Select-Object -First 1
+          $cli = Get-ChildItem -Path $buildDir -Recurse -Filter 'btx-cli.exe' | Select-Object -First 1
+          if (-not $daemon -or -not $cli) { throw 'Build did not produce btxd.exe / btx-cli.exe' }
+          "BTXD_PATH=$($daemon.FullName)" >> $env:GITHUB_ENV
+          "BTX_CLI_PATH=$($cli.FullName)" >> $env:GITHUB_ENV
+
+      - name: Package Windows release archive
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = & "${env:GITHUB_WORKSPACE}\scripts\ci\read-btx-version.ps1" -SourceDir "${env:GITHUB_WORKSPACE}\btx-src"
+          $outDir = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $metaJson = python "${env:GITHUB_WORKSPACE}\btx-src\scripts\release\package_release_archive.py" `
+            --output-dir $outDir `
+            --version $version `
+            --platform-id windows-x86_64 `
+            --btxd $env:BTXD_PATH `
+            --btx-cli $env:BTX_CLI_PATH `
+            --source-root "${env:GITHUB_WORKSPACE}\btx-src"
+          Write-Host $metaJson
+          $meta = $metaJson | ConvertFrom-Json
+          $archivePath = $meta.archive_path
+          if (-not (Test-Path -LiteralPath $archivePath)) {
+            $archivePath = Get-ChildItem $outDir -Filter '*.zip' | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $archivePath) { throw 'Packaging did not produce a zip archive' }
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLower()
+          "$hash *$(Split-Path $archivePath -Leaf)" | Set-Content -Encoding ascii (Join-Path $outDir 'SHA256SUMS')
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "archive_name=$(Split-Path $archivePath -Leaf)" >> $env:GITHUB_OUTPUT
+          "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: btx-windows-${{ steps.package.outputs.version }}
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS
+
+      - name: Resolve release tag
+        if: >-
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v'))
+          || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        id: release
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.inputs.release_tag }}'
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            if ('${{ github.ref }}' -like 'refs/tags/*') {
+              $tag = '${{ github.ref_name }}'
+            } else {
+              $tag = "node-v${{ steps.package.outputs.version }}"
+            }
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub release
+        if: >-
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v'))
+          || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: BTX Windows Node ${{ steps.package.outputs.version }}
+          body: |
+            Native Windows `btxd` / `btx-cli` built from `${{ steps.params.outputs.btx_repo }}` @ `${{ steps.params.outputs.btx_ref }}`.
+
+            Install with **BTX Node Manager** (Updates tab) or extract the zip into `%LOCALAPPDATA%\BTX\bin`.
+
+            Built by GitHub Actions workflow `${{ github.workflow }}` run ${{ github.run_id }}.
+          files: |
+            ${{ steps.package.outputs.archive_path }}
+            dist/SHA256SUMS
+          draft: false
+          prerelease: false
