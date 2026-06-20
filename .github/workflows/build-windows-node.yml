@@ -33,9 +33,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  VCPKG_ROOT: C:\btx-deps\vcpkg
-  VCPKG_INSTALLED_DIR: C:\btx-deps\vcpkg_installed\btx-node
-  VCPKG_BUILDTREES_ROOT: C:\btx-deps\vcpkg-buildtrees
+  VCPKG_ROOT: C:\vcpkg
+  VCPKG_BUILDTREES_ROOT: C:\vcpkg-buildtrees
 
 jobs:
   build-windows:
@@ -72,34 +71,23 @@ jobs:
           ref: ${{ steps.params.outputs.btx_ref }}
           path: btx-src
 
-      - name: Cache vcpkg
+      - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: |
-            C:\btx-deps\vcpkg
-            C:\btx-deps\vcpkg_installed
-            C:\btx-deps\vcpkg-buildtrees
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('btx-src/vcpkg.json', 'btx-src/vcpkg.lock.json') }}
+            C:\vcpkg\downloads
+            C:\vcpkg\packages
+            C:\vcpkg\installed
+            C:\vcpkg-buildtrees
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('btx-src/vcpkg.json') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-
 
       - name: Build Windows binaries
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $buildDir = Join-Path $env:GITHUB_WORKSPACE 'btx-build'
-          & "${env:GITHUB_WORKSPACE}\btx-src\contrib\devtools\build-btx-windows.ps1" `
-            -SourceDir "${env:GITHUB_WORKSPACE}\btx-src" `
-            -BuildDir $buildDir `
-            -VcpkgRoot $env:VCPKG_ROOT `
-            -VcpkgInstalledDir $env:VCPKG_INSTALLED_DIR `
-            -VcpkgBuildtreesRoot $env:VCPKG_BUILDTREES_ROOT `
-            -SkipSmokeTest
-          $daemon = Get-ChildItem -Path $buildDir -Recurse -Filter 'btxd.exe' | Select-Object -First 1
-          $cli = Get-ChildItem -Path $buildDir -Recurse -Filter 'btx-cli.exe' | Select-Object -First 1
-          if (-not $daemon -or -not $cli) { throw 'Build did not produce btxd.exe / btx-cli.exe' }
-          "BTXD_PATH=$($daemon.FullName)" >> $env:GITHUB_ENV
-          "BTX_CLI_PATH=$($cli.FullName)" >> $env:GITHUB_ENV
+          & "${env:GITHUB_WORKSPACE}\scripts\ci\build-windows-node.ps1" `
+            -BtxSourceDir "${env:GITHUB_WORKSPACE}\btx-src"
 
       - name: Package Windows release archive
         id: package
