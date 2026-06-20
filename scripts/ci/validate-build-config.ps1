@@ -29,5 +29,14 @@ if ($scriptText -notmatch "BUILD_GUI=OFF") {
 if ($scriptText -match "windows-clangcl-static") {
     throw 'build-windows-node.ps1 must not use windows-clangcl-static preset'
 }
+if ($scriptText -match "cmake\s+--preset") {
+    throw 'build-windows-node.ps1 must not use cmake presets (they enable vcpkg default features)'
+}
+if ($scriptText -notmatch 'Visual Studio 17 2022') {
+    throw 'build-windows-node.ps1 must use the Visual Studio 17 2022 generator'
+}
+if ($scriptText -notmatch "Assert-HeadlessVcpkgInstall") {
+    throw 'build-windows-node.ps1 must verify the headless vcpkg install'
+}
 
 Write-Host 'CI build config validation passed (headless wallet build, no Qt).'

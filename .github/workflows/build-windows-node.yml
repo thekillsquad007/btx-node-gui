@@ -86,9 +86,24 @@ jobs:
             C:\vcpkg\packages
             C:\vcpkg-installed
             C:\vcpkg-buildtrees
-          key: vcpkg-headless-wallet-${{ hashFiles('btx-src/vcpkg.json') }}
+          key: vcpkg-headless-wallet-v2-${{ hashFiles('btx-src/vcpkg.json') }}
           restore-keys: |
-            vcpkg-headless-wallet-
+            vcpkg-headless-wallet-v2-
+
+      - name: Purge Qt artifacts from vcpkg cache
+        shell: pwsh
+        run: |
+          $patterns = @('qt5*', 'libqrencode*')
+          foreach ($root in @($env:VCPKG_BUILDTREES_ROOT, $env:VCPKG_INSTALLED_DIR)) {
+            if (-not (Test-Path -LiteralPath $root)) { continue }
+            foreach ($pattern in $patterns) {
+              Get-ChildItem -Path $root -Filter $pattern -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  Write-Host "Removing stale vcpkg dir: $($_.FullName)"
+                  Remove-Item -LiteralPath $_.FullName -Recurse -Force
+                }
+            }
+          }
 
       - name: Build Windows binaries
         shell: pwsh

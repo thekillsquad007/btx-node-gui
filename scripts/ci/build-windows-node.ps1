@@ -87,6 +87,42 @@ function Ensure-Vcpkg([string]$Root) {
     return $toolchain
 }
 
+function Assert-HeadlessVcpkgInstall([string]$InstalledDir, [string]$BuildDir) {
+    $forbidden = @("qt5-base", "qt5-tools", "qt5", "libqrencode")
+    if (Test-Path -LiteralPath $InstalledDir) {
+        foreach ($pkg in $forbidden) {
+            $matches = Get-ChildItem -Path $InstalledDir -Recurse -Directory -Filter $pkg -ErrorAction SilentlyContinue
+            if ($matches) {
+                throw "Headless build must not install $pkg (found under $InstalledDir)"
+            }
+        }
+    }
+
+    $installLog = Join-Path $BuildDir "vcpkg-manifest-install.log"
+    if (Test-Path -LiteralPath $installLog) {
+        $logText = Get-Content -LiteralPath $installLog -Raw
+        foreach ($pkg in $forbidden) {
+            if ($logText -match "Installing\s+$pkg[:/]" -or $logText -match "Building\s+$pkg[:/]") {
+                throw "vcpkg manifest install pulled $pkg; disable default features and BUILD_GUI"
+            }
+        }
+    }
+
+    $cacheFile = Join-Path $BuildDir "CMakeCache.txt"
+    if (Test-Path -LiteralPath $cacheFile) {
+        $cache = Get-Content -LiteralPath $cacheFile -Raw
+        if ($cache -notmatch "VCPKG_MANIFEST_NO_DEFAULT_FEATURES:BOOL=ON") {
+            throw "CMake cache missing VCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON"
+        }
+        if ($cache -notmatch "VCPKG_MANIFEST_FEATURES:STRING=wallet") {
+            throw "CMake cache must request wallet feature only"
+        }
+        if ($cache -match "BUILD_GUI:BOOL=ON") {
+            throw "BUILD_GUI must remain OFF for headless node CI"
+        }
+    }
+}
+
 function Find-Binary([string]$Root, [string]$Name) {
     $candidates = @(
         (Join-Path $Root "bin\$Configuration\$Name.exe"),
@@ -147,6 +183,7 @@ $configureArgs = @(
 ) -join " "
 
 Invoke-VsBatch -VsDevCmd $vsDevCmd -Lines @($configureArgs) -Label "CMake configure"
+Assert-HeadlessVcpkgInstall -InstalledDir $VcpkgInstalledDir -BuildDir $BuildDir
 
 Write-Step "Building btxd and btx-cli ($Configuration)"
 $buildArgs = "cmake --build `"$BuildDir`" --config $Configuration --parallel --target btxd btx-cli"
