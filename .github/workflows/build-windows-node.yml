@@ -90,6 +90,11 @@ jobs:
           restore-keys: |
             vcpkg-headless-wallet-v2-
 
+      - name: Initialize MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Purge Qt artifacts from vcpkg cache
         shell: pwsh
         run: |

@@ -15,39 +15,45 @@ function Write-Step([string]$Message) {
     Write-Host "[ci] $Message"
 }
 
-function Get-VsDevCmdPath {
+function Get-VsInstallInfo {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere)) {
         throw "vswhere.exe not found"
     }
+
     $installationPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if ([string]::IsNullOrWhiteSpace($installationPath)) {
-        throw "Visual Studio 2022 C++ tools were not found"
+        throw "Visual Studio C++ tools were not found"
     }
-    $vsDevCmd = Join-Path $installationPath.Trim() "Common7\Tools\VsDevCmd.bat"
+    $installationPath = $installationPath.Trim()
+
+    $vsDevCmd = Join-Path $installationPath "Common7\Tools\VsDevCmd.bat"
     if (-not (Test-Path -LiteralPath $vsDevCmd)) {
         throw "VsDevCmd.bat not found at $vsDevCmd"
     }
-    return $vsDevCmd
+
+    return @{
+        InstallationPath = $installationPath
+        VsDevCmd = $vsDevCmd
+    }
 }
 
-function Invoke-VsBatch([string]$VsDevCmd, [string[]]$Lines, [string]$Label) {
-    $tempFile = Join-Path $env:TEMP ("btx-ci-" + [Guid]::NewGuid().ToString("N") + ".cmd")
-    try {
-        $script = @(
-            "@echo off",
-            "setlocal enableextensions",
-            "call `"$VsDevCmd`" -arch=x64 -host_arch=x64 >nul || exit /b 1",
-            "set VCPKG_ROOT=$VcpkgRoot"
-        ) + $Lines
-        Set-Content -LiteralPath $tempFile -Encoding Ascii -Value ($script -join "`r`n")
-        Write-Step $Label
-        cmd.exe /d /s /c "`"$tempFile`""
-        if ($LASTEXITCODE -ne 0) {
-            throw "$Label failed with exit code $LASTEXITCODE"
+function Import-VsDevEnvironment([string]$VsDevCmd) {
+    cmd.exe /c "`"$VsDevCmd`" -arch=x64 -host_arch=x64 >nul && set" |
+        ForEach-Object {
+            if ($_ -match "^(?<key>[^=]+)=(?<value>.*)$") {
+                Set-Item -Path "env:$($Matches.key)" -Value $Matches.value
+            }
         }
-    } finally {
-        Remove-Item -LiteralPath $tempFile -ErrorAction SilentlyContinue
+}
+
+function Invoke-VsCmake([hashtable]$Vs, [string[]]$CmakeArgs, [string]$Label) {
+    Import-VsDevEnvironment -VsDevCmd $Vs.VsDevCmd
+    $env:VCPKG_ROOT = $VcpkgRoot
+    Write-Step $Label
+    & cmake @CmakeArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -152,19 +158,20 @@ New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 New-Item -ItemType Directory -Force -Path $VcpkgInstalledDir | Out-Null
 New-Item -ItemType Directory -Force -Path $VcpkgBuildtrees | Out-Null
 
-$vsDevCmd = Get-VsDevCmdPath
+$vs = Get-VsInstallInfo
 $toolchain = Ensure-Vcpkg -Root $VcpkgRoot
 
 Write-Step "Configuring headless wallet-enabled BTX build (no Qt/GUI)"
+Write-Step "Using Visual Studio at $($vs.InstallationPath)"
 $configureArgs = @(
-    "cmake",
-    "-S `"$BtxSourceDir`"",
-    "-B `"$BuildDir`"",
-    "-G `"Visual Studio 17 2022`"",
-    "-A x64",
-    "-DCMAKE_TOOLCHAIN_FILE=`"$toolchain`"",
+    "-S", $BtxSourceDir,
+    "-B", $BuildDir,
+    "-G", "Visual Studio 17 2022",
+    "-A", "x64",
+    "-DCMAKE_GENERATOR_INSTANCE=$($vs.InstallationPath)",
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
     "-DVCPKG_TARGET_TRIPLET=x64-windows",
-    "-DVCPKG_INSTALLED_DIR=`"$VcpkgInstalledDir`"",
+    "-DVCPKG_INSTALLED_DIR=$VcpkgInstalledDir",
     "-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=$VcpkgBuildtrees",
     "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON",
     "-DVCPKG_MANIFEST_FEATURES=wallet",
@@ -180,14 +187,19 @@ $configureArgs = @(
     "-DWITH_SQLITE=ON",
     "-DBTX_ENABLE_CUDA_EXPERIMENTAL=OFF",
     "-DWARN_INCOMPATIBLE_BDB=OFF"
-) -join " "
+)
 
-Invoke-VsBatch -VsDevCmd $vsDevCmd -Lines @($configureArgs) -Label "CMake configure"
+Invoke-VsCmake -Vs $vs -CmakeArgs $configureArgs -Label "CMake configure"
 Assert-HeadlessVcpkgInstall -InstalledDir $VcpkgInstalledDir -BuildDir $BuildDir
 
 Write-Step "Building btxd and btx-cli ($Configuration)"
-$buildArgs = "cmake --build `"$BuildDir`" --config $Configuration --parallel --target btxd btx-cli"
-Invoke-VsBatch -VsDevCmd $vsDevCmd -Lines @($buildArgs) -Label "CMake build"
+$buildArgs = @(
+    "--build", $BuildDir,
+    "--config", $Configuration,
+    "--parallel",
+    "--target", "btxd", "btx-cli"
+)
+Invoke-VsCmake -Vs $vs -CmakeArgs $buildArgs -Label "CMake build"
 
 $daemon = Find-Binary -Root $BuildDir -Name "btxd"
 $cli = Find-Binary -Root $BuildDir -Name "btx-cli"

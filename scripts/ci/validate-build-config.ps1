@@ -35,6 +35,9 @@ if ($scriptText -match "cmake\s+--preset") {
 if ($scriptText -notmatch 'Visual Studio 17 2022') {
     throw 'build-windows-node.ps1 must use the Visual Studio 17 2022 generator'
 }
+if ($scriptText -notmatch 'CMAKE_GENERATOR_INSTANCE') {
+    throw 'build-windows-node.ps1 must pin the Visual Studio generator instance for CI'
+}
 if ($scriptText -notmatch "Assert-HeadlessVcpkgInstall") {
     throw 'build-windows-node.ps1 must verify the headless vcpkg install'
 }
